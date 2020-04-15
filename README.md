@@ -1,4 +1,6 @@
-**Status:** Archived. Code is provided as-is with no updates expected. Unfortunately I don't have the personal time to dedicate to maintaining this repo/responding to issues, nor access to the MIMIC dataset anymore, though I hope the model code and data splits can still be of use to the community.
+**Status:** Archived. Code is provided as-is with no updates expected. 
+
+Unfortunately I (James) don't have the personal time to dedicate to maintaining this repo/responding to issues, nor access to the MIMIC dataset anymore, though I hope the model code and data splits can still be of use to the community. Co-author [@sarahwie](https://github.com/sarahwie) will be handling issues and questions; please direct all enquiries to her. 
 
 # caml-mimic
 
