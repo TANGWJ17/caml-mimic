@@ -1,22 +1,18 @@
 """
     Holds PyTorch models
 """
-from gensim.models import KeyedVectors
+from math import floor
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.init import xavier_uniform
+from gensim.models import KeyedVectors
 from torch.autograd import Variable
+from torch.nn.init import xavier_uniform_ as xavier_uniform
 
-import numpy as np
-
-from math import floor
-import random
-import sys
-import time
-
-from constants import *
 from dataproc import extract_wvs
+
 
 class BaseModel(nn.Module):
 
@@ -29,7 +25,7 @@ class BaseModel(nn.Module):
         self.embed_drop = nn.Dropout(p=dropout)
         self.lmbda = lmbda
 
-        #make embedding layer
+        # make embedding layer
         if embed_file:
             print("loading pretrained embeddings...")
             W = torch.Tensor(extract_wvs.load_embeddings(embed_file))
@@ -37,24 +33,23 @@ class BaseModel(nn.Module):
             self.embed = nn.Embedding(W.size()[0], W.size()[1], padding_idx=0)
             self.embed.weight.data = W.clone()
         else:
-            #add 2 to include UNK and PAD
+            # add 2 to include UNK and PAD
             vocab_size = len(dicts['ind2w'])
-            self.embed = nn.Embedding(vocab_size+2, embed_size, padding_idx=0)
-            
+            self.embed = nn.Embedding(vocab_size + 2, embed_size, padding_idx=0)
 
     def _get_loss(self, yhat, target, diffs=None):
-        #calculate the BCE
+        # calculate the BCE
         loss = F.binary_cross_entropy_with_logits(yhat, target)
 
-        #add description regularization loss if relevant
+        # add description regularization loss if relevant
         if self.lmbda > 0 and diffs is not None:
             diff = torch.stack(diffs).mean()
             loss = loss + diff
         return loss
 
     def embed_descriptions(self, desc_data, gpu):
-        #label description embedding via convolutional layer
-        #number of labels is inconsistent across instances, so have to iterate over the batch
+        # label description embedding via convolutional layer
+        # number of labels is inconsistent across instances, so have to iterate over the batch
         b_batch = []
         for inst in desc_data:
             if len(inst) > 0:
@@ -63,7 +58,7 @@ class BaseModel(nn.Module):
                 else:
                     lt = Variable(torch.LongTensor(inst))
                 d = self.desc_embedding(lt)
-                d = d.transpose(1,2)
+                d = d.transpose(1, 2)
                 d = self.label_conv(d)
                 d = F.max_pool1d(F.tanh(d), kernel_size=d.size()[2])
                 d = d.squeeze(2)
@@ -74,20 +69,21 @@ class BaseModel(nn.Module):
         return b_batch
 
     def _compare_label_embeddings(self, target, b_batch, desc_data):
-        #description regularization loss 
-        #b is the embedding from description conv
-        #iterate over batch because each instance has different # labels
+        # description regularization loss
+        # b is the embedding from description conv
+        # iterate over batch because each instance has different # labels
         diffs = []
-        for i,bi in enumerate(b_batch):
+        for i, bi in enumerate(b_batch):
             ti = target[i]
             inds = torch.nonzero(ti.data).squeeze().cpu().numpy()
 
-            zi = self.final.weight[inds,:]
+            zi = self.final.weight[inds, :]
             diff = (zi - bi).mul(zi - bi).mean()
 
-            #multiply by number of labels to make sure overall mean is balanced with regard to number of labels
-            diffs.append(self.lmbda*diff*bi.size()[0])
+            # multiply by number of labels to make sure overall mean is balanced with regard to number of labels
+            diffs.append(self.lmbda * diff * bi.size()[0])
         return diffs
+
 
 class BOWPool(BaseModel):
     """
@@ -112,12 +108,13 @@ class BOWPool(BaseModel):
         self.final.weight.data = torch.Tensor(weights).clone()
 
     def forward(self, x, target, desc_data=None, get_attention=False):
-        #get embeddings and apply dropout
+        # get embeddings and apply dropout
         x = self.embed(x)
         x = self.embed_drop(x)
         x = x.transpose(1, 2)
         if self.pool == 'max':
-            import pdb; pdb.set_trace()
+            import pdb;
+            pdb.set_trace()
             x = F.max_pool1d(x)
         else:
             x = F.avg_pool1d(x)
@@ -125,39 +122,43 @@ class BOWPool(BaseModel):
         loss = self._get_loss(logits, target, diffs)
         return yhat, loss, None
 
+
 class ConvAttnPool(BaseModel):
 
-    def __init__(self, Y, embed_file, kernel_size, num_filter_maps, lmbda, gpu, dicts, embed_size=100, dropout=0.5, code_emb=None):
+    def __init__(self, Y, embed_file, kernel_size, num_filter_maps, lmbda, gpu, dicts, embed_size=100, dropout=0.5,
+                 code_emb=None):
         super(ConvAttnPool, self).__init__(Y, embed_file, dicts, lmbda, dropout=dropout, gpu=gpu, embed_size=embed_size)
 
-        #initialize conv layer as in 2.1
-        self.conv = nn.Conv1d(self.embed_size, num_filter_maps, kernel_size=kernel_size, padding=int(floor(kernel_size/2)))
+        # initialize conv layer as in 2.1
+        self.conv = nn.Conv1d(self.embed_size, num_filter_maps, kernel_size=kernel_size,
+                              padding=int(floor(kernel_size / 2)))
         xavier_uniform(self.conv.weight)
 
-        #context vectors for computing attention as in 2.2
+        # context vectors for computing attention as in 2.2
         self.U = nn.Linear(num_filter_maps, Y)
         xavier_uniform(self.U.weight)
 
-        #final layer: create a matrix to use for the L binary classifiers as in 2.3
+        # final layer: create a matrix to use for the L binary classifiers as in 2.3
         self.final = nn.Linear(num_filter_maps, Y)
         xavier_uniform(self.final.weight)
 
-        #initialize with trained code embeddings if applicable
+        # initialize with trained code embeddings if applicable
         if code_emb:
             self._code_emb_init(code_emb, dicts)
-            #also set conv weights to do sum of inputs
-            weights = torch.eye(self.embed_size).unsqueeze(2).expand(-1,-1,kernel_size)/kernel_size
+            # also set conv weights to do sum of inputs
+            weights = torch.eye(self.embed_size).unsqueeze(2).expand(-1, -1, kernel_size) / kernel_size
             self.conv.weight.data = weights.clone()
             self.conv.bias.data.zero_()
-        
-        #conv for label descriptions as in 2.5
-        #description module has its own embedding and convolution layers
+
+        # conv for label descriptions as in 2.5
+        # description module has its own embedding and convolution layers
         if lmbda > 0:
             W = self.embed.weight.data
             self.desc_embedding = nn.Embedding(W.size()[0], W.size()[1], padding_idx=0)
             self.desc_embedding.weight.data = W.clone()
 
-            self.label_conv = nn.Conv1d(self.embed_size, num_filter_maps, kernel_size=kernel_size, padding=int(floor(kernel_size/2)))
+            self.label_conv = nn.Conv1d(self.embed_size, num_filter_maps, kernel_size=kernel_size,
+                                        padding=int(floor(kernel_size / 2)))
             xavier_uniform(self.label_conv.weight)
 
             self.label_fc1 = nn.Linear(num_filter_maps, num_filter_maps)
@@ -171,31 +172,31 @@ class ConvAttnPool(BaseModel):
             weights[i] = code_embs[code]
         self.U.weight.data = torch.Tensor(weights).clone()
         self.final.weight.data = torch.Tensor(weights).clone()
-        
+
     def forward(self, x, target, desc_data=None, get_attention=True):
-        #get embeddings and apply dropout
+        # get embeddings and apply dropout
         x = self.embed(x)
         x = self.embed_drop(x)
         x = x.transpose(1, 2)
 
-        #apply convolution and nonlinearity (tanh)
-        x = F.tanh(self.conv(x).transpose(1,2))
-        #apply attention
-        alpha = F.softmax(self.U.weight.matmul(x.transpose(1,2)), dim=2)
-        #document representations are weighted sums using the attention. Can compute all at once as a matmul
+        # apply convolution and nonlinearity (tanh)
+        x = F.tanh(self.conv(x).transpose(1, 2))
+        # apply attention
+        alpha = F.softmax(self.U.weight.matmul(x.transpose(1, 2)), dim=2)
+        # document representations are weighted sums using the attention. Can compute all at once as a matmul
         m = alpha.matmul(x)
-        #final layer classification
+        # final layer classification
         y = self.final.weight.mul(m).sum(dim=2).add(self.final.bias)
-        
+
         if desc_data is not None:
-            #run descriptions through description module
+            # run descriptions through description module
             b_batch = self.embed_descriptions(desc_data, self.gpu)
-            #get l2 similarity loss
+            # get l2 similarity loss
             diffs = self._compare_label_embeddings(target, b_batch, desc_data)
         else:
             diffs = None
-            
-        #final sigmoid to get predictions
+
+        # final sigmoid to get predictions
         yhat = y
         loss = self._get_loss(yhat, target, diffs)
         return yhat, loss, alpha
@@ -204,25 +205,25 @@ class ConvAttnPool(BaseModel):
 class VanillaConv(BaseModel):
 
     def __init__(self, Y, embed_file, kernel_size, num_filter_maps, gpu=True, dicts=None, embed_size=100, dropout=0.5):
-        super(VanillaConv, self).__init__(Y, embed_file, dicts, dropout=dropout, embed_size=embed_size) 
-        #initialize conv layer as in 2.1
+        super(VanillaConv, self).__init__(Y, embed_file, dicts, dropout=dropout, embed_size=embed_size)
+        # initialize conv layer as in 2.1
         self.conv = nn.Conv1d(self.embed_size, num_filter_maps, kernel_size=kernel_size)
         xavier_uniform(self.conv.weight)
 
-        #linear output
+        # linear output
         self.fc = nn.Linear(num_filter_maps, Y)
         xavier_uniform(self.fc.weight)
 
     def forward(self, x, target, desc_data=None, get_attention=False):
-        #embed
+        # embed
         x = self.embed(x)
         x = self.embed_drop(x)
         x = x.transpose(1, 2)
 
-        #conv/max-pooling
+        # conv/max-pooling
         c = self.conv(x)
         if get_attention:
-            #get argmax vector too
+            # get argmax vector too
             x, argmax = F.max_pool1d(F.tanh(c), kernel_size=c.size()[2], return_indices=True)
             attn = self.construct_attention(argmax, c.size()[2])
         else:
@@ -230,10 +231,10 @@ class VanillaConv(BaseModel):
             attn = None
         x = x.squeeze(dim=2)
 
-        #linear output
+        # linear output
         x = self.fc(x)
 
-        #final sigmoid to get predictions
+        # final sigmoid to get predictions
         yhat = x
         loss = self._get_loss(yhat, target)
         return yhat, loss, attn
@@ -243,22 +244,22 @@ class VanillaConv(BaseModel):
         for argmax_i in argmax:
             attns = []
             for i in range(num_windows):
-                #generate mask to select indices of conv features where max was i
-                mask = (argmax_i == i).repeat(1,self.Y).t()
-                #apply mask to every label's weight vector and take the sum to get the 'attention' score
-                weights = self.fc.weight[mask].view(-1,self.Y)
+                # generate mask to select indices of conv features where max was i
+                mask = (argmax_i == i).repeat(1, self.Y).t()
+                # apply mask to every label's weight vector and take the sum to get the 'attention' score
+                weights = self.fc.weight[mask].view(-1, self.Y)
                 if len(weights.size()) > 0:
                     window_attns = weights.sum(dim=0)
                     attns.append(window_attns)
                 else:
-                    #this window was never a max
+                    # this window was never a max
                     attns.append(Variable(torch.zeros(self.Y)).cuda())
-            #combine
+            # combine
             attn = torch.stack(attns)
             attn_batches.append(attn)
         attn_full = torch.stack(attn_batches)
-        #put it in the right form for passing to interpret
-        attn_full = attn_full.transpose(1,2)
+        # put it in the right form for passing to interpret
+        attn_full = attn_full.transpose(1, 2)
         return attn_full
 
 
@@ -275,50 +276,55 @@ class VanillaRNN(BaseModel):
         self.num_layers = num_layers
         self.num_directions = 2 if bidirectional else 1
 
-        #recurrent unit
+        # recurrent unit
         if self.cell_type == 'lstm':
-            self.rnn = nn.LSTM(self.embed_size, floor(self.rnn_dim/self.num_directions), self.num_layers, bidirectional=bidirectional)
+            self.rnn = nn.LSTM(self.embed_size, floor(self.rnn_dim / self.num_directions), self.num_layers,
+                               bidirectional=bidirectional)
         else:
-            self.rnn = nn.GRU(self.embed_size, floor(self.rnn_dim/self.num_directions), self.num_layers, bidirectional=bidirectional)
-        #linear output
+            self.rnn = nn.GRU(self.embed_size, floor(self.rnn_dim / self.num_directions), self.num_layers,
+                              bidirectional=bidirectional)
+        # linear output
         self.final = nn.Linear(self.rnn_dim, Y)
 
-        #arbitrary initialization
+        # arbitrary initialization
         self.batch_size = 16
         self.hidden = self.init_hidden()
 
     def forward(self, x, target, desc_data=None, get_attention=False):
-        #clear hidden state, reset batch size at the start of each batch
+        # clear hidden state, reset batch size at the start of each batch
         self.refresh(x.size()[0])
 
-        #embed
-        embeds = self.embed(x).transpose(0,1)
-        #apply RNN
+        # embed
+        embeds = self.embed(x).transpose(0, 1)
+        # apply RNN
         out, self.hidden = self.rnn(embeds, self.hidden)
 
-        #get final hidden state in the appropriate way
+        # get final hidden state in the appropriate way
         last_hidden = self.hidden[0] if self.cell_type == 'lstm' else self.hidden
-        last_hidden = last_hidden[-1] if self.num_directions == 1 else last_hidden[-2:].transpose(0,1).contiguous().view(self.batch_size, -1)
-        #apply linear layer and sigmoid to get predictions
+        last_hidden = last_hidden[-1] if self.num_directions == 1 \
+            else last_hidden[-2:].transpose(0, 1).contiguous().view(self.batch_size, -1)
+        # apply linear layer and sigmoid to get predictions
         yhat = self.final(last_hidden)
         loss = self._get_loss(yhat, target)
         return yhat, loss, None
 
     def init_hidden(self):
         if self.gpu:
-            h_0 = Variable(torch.cuda.FloatTensor(self.num_directions*self.num_layers, self.batch_size,
-                                                  floor(self.rnn_dim/self.num_directions)).zero_())
+            h_0 = torch.cuda.FloatTensor(self.num_directions * self.num_layers, self.batch_size,
+                                         floor(self.rnn_dim / self.num_directions)).zero_()
             if self.cell_type == 'lstm':
-                c_0 = Variable(torch.cuda.FloatTensor(self.num_directions*self.num_layers, self.batch_size,
-                                                      floor(self.rnn_dim/self.num_directions)).zero_())
-                return (h_0, c_0)
+                c_0 = torch.cuda.FloatTensor(self.num_directions * self.num_layers, self.batch_size,
+                                             floor(self.rnn_dim / self.num_directions)).zero_()
+                return h_0, c_0
             else:
                 return h_0
         else:
-            h_0 = Variable(torch.zeros(self.num_directions*self.num_layers, self.batch_size, floor(self.rnn_dim/self.num_directions)))
+            h_0 = torch.zeros(self.num_directions * self.num_layers, self.batch_size,
+                              floor(self.rnn_dim / self.num_directions))
             if self.cell_type == 'lstm':
-                c_0 = Variable(torch.zeros(self.num_directions*self.num_layers, self.batch_size, floor(self.rnn_dim/self.num_directions)))
-                return (h_0, c_0)
+                c_0 = torch.zeros(self.num_directions * self.num_layers, self.batch_size,
+                                  floor(self.rnn_dim / self.num_directions))
+                return h_0, c_0
             else:
                 return h_0
 

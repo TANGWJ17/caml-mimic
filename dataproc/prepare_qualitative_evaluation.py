@@ -9,8 +9,8 @@ from collections import Counter
 import numpy as np
 from tqdm import tqdm
 
-from constants import *
 import datasets
+from constants import *
 
 CONTEXT_SIZE = 10
 NUM_QUESTIONS = 100
@@ -25,6 +25,7 @@ CONV_FILENAME = "bar"
 LR_FILENAME = "baz"
 SIM_FILENAME = "hax"
 
+
 def main():
     desc_dict = datasets.load_code_descriptions()
 
@@ -33,7 +34,7 @@ def main():
     attn_window_szs = {}
     with open(ATTN_FILENAME, 'r') as f:
         r = csv.reader(f)
-        #header
+        # header
         next(r)
         for row in r:
             attn_windows[(int(row[0]), row[1])] = int(row[2])
@@ -43,7 +44,7 @@ def main():
     conv_windows = {}
     with open(CONV_FILENAME, 'r') as f:
         r = csv.reader(f)
-        #header
+        # header
         next(r)
         for row in r:
             conv_windows[(int(row[0]), row[1])] = int(row[2])
@@ -52,7 +53,7 @@ def main():
     lr_windows = {}
     with open(LR_FILENAME, 'r') as f:
         r = csv.reader(f)
-        #header
+        # header
         next(r)
         for row in r:
             lr_windows[(int(row[1]), row[2])] = int(row[3])
@@ -62,7 +63,7 @@ def main():
     sim_vals = {}
     with open(SIM_FILENAME, 'r') as f:
         r = csv.reader(f)
-        #header
+        # header
         next(r)
         for row in r:
             sim_windows[(int(row[1]), row[2])] = int(row[3])
@@ -81,17 +82,18 @@ def main():
             of.write(INSTRUCTIONS + '\n\n')
             with open('%s/test_full.csv' % MIMIC_3_DIR, 'r') as f:
                 r = csv.reader(f)
-                #header
+                # header
                 next(r)
                 num_pairs = 0
-                for idx,row in tqdm(enumerate(r)):
+                for idx, row in tqdm(enumerate(r)):
                     codes = str(row[3]).split(';')
                     toks = row[2].split()
                     hadm_id = int(row[1])
                     for code in codes:
                         num_pairs += 1
                         key = (hadm_id, code)
-                        if key in conv_keys and key in lr_keys and key in sim_keys and key in attn_keys and code_counts[code] < MAX_CODE_OCCURRENCES:
+                        if key in conv_keys and key in lr_keys and key in sim_keys and key in attn_keys and code_counts[
+                            code] < MAX_CODE_OCCURRENCES:
                             if sim_vals[key] == 0:
                                 continue
                             code_counts[code] += 1
@@ -107,19 +109,22 @@ def main():
                 kf.write("Code: %s\n" % code)
                 of.write("Full descriptions: %s\n\n" % desc_dict[code])
                 kf.write("Full descriptions: %s\n\n" % desc_dict[code])
-                for i,(method,window) in enumerate(np.random.permutation([('attn', attn_windows[key]), ('conv', conv_windows[key]), ('lr', lr_windows[key]), ('sim', sim_windows[key])])):
+                for i, (method, window) in enumerate(np.random.permutation(
+                        [('attn', attn_windows[key]), ('conv', conv_windows[key]), ('lr', lr_windows[key]),
+                         ('sim', sim_windows[key])])):
                     window = int(window)
                     if method == 'attn':
                         filter_size = attn_window_szs[key]
                     else:
                         filter_size = FILTER_SIZE
-                    pre = toks[window-(CONTEXT_SIZE/2):window]
-                    mid = toks[window:window+filter_size]
-                    post = toks[window+filter_size:window+filter_size+(CONTEXT_SIZE/2)]
+                    pre = toks[window - (CONTEXT_SIZE / 2):window]
+                    mid = toks[window:window + filter_size]
+                    post = toks[window + filter_size:window + filter_size + (CONTEXT_SIZE / 2)]
                     md_out = ' '.join(pre) + ' **' + ' '.join(mid) + '** ' + ' '.join(post)
                     of.write('%s) %s\n\n' % (opts[i], md_out))
                     kf.write('%s (%s) %s\n\n' % (opts[i], method, md_out))
             print("percentage of valid document-code pairs: %f" % (len(valid_texts) / float(num_pairs)))
+
 
 if __name__ == "__main__":
     main()

@@ -1,29 +1,27 @@
 """
     Main training code. Loads data, builds the model, trains, tests, evaluates, writes outputs, etc.
 """
-import torch
-import torch.optim as optim
-from torch.autograd import Variable
-import torch.nn.functional as F
-
-import csv
 import argparse
-import os 
-import numpy as np
-import operator
-import random
+import csv
+import os
 import sys
 import time
-from tqdm import tqdm
 from collections import defaultdict
 
-from constants import *
+import interpret
+import numpy as np
+import torch
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.autograd import Variable
+from tqdm import tqdm
+
 import datasets
 import evaluation
-import interpret
-import persistence
-import learn.models as models
 import learn.tools as tools
+import persistence
+from constants import *
+
 
 def main(args):
     start = time.time()
@@ -31,14 +29,15 @@ def main(args):
     epochs_trained = train_epochs(args, model, optimizer, params, dicts)
     print("TOTAL ELAPSED TIME FOR %s MODEL AND %d EPOCHS: %f" % (args.model, epochs_trained, time.time() - start))
 
+
 def init(args):
     """
         Load data, build model, create optimizer, create vars to hold metrics, etc.
     """
-    #need to handle really large text fields
-    csv.field_size_limit(sys.maxsize)
+    # need to handle really large text fields
+    # csv.field_size_limit(sys.maxsize)
 
-    #load vocab and other lookups
+    # load vocab and other lookups
     desc_embed = args.lmbda > 0
     print("loading lookups...")
     dicts = datasets.load_lookups(args, desc_embed=desc_embed)
@@ -52,8 +51,9 @@ def init(args):
         optimizer = None
 
     params = tools.make_param_dict(args)
-    
+
     return args, model, optimizer, params, dicts
+
 
 def train_epochs(args, model, optimizer, params, dicts):
     """
@@ -65,17 +65,20 @@ def train_epochs(args, model, optimizer, params, dicts):
 
     test_only = args.test_model is not None
     evaluate = args.test_model is not None
-    #train for n_epochs unless criterion metric does not improve for [patience] epochs
+    # train for n_epochs unless criterion metric does not improve for [patience] epochs
     for epoch in range(args.n_epochs):
-        #only test on train/test set on very last epoch
+        # only test on train/test set on very last epoch
         if epoch == 0 and not args.test_model:
-            model_dir = os.path.join(MODEL_DIR, '_'.join([args.model, time.strftime('%b_%d_%H:%M:%S', time.localtime())]))
-            os.mkdir(model_dir)
+            # model_dir = os.path.join(MODEL_DIR,
+            #                          '_'.join([args.model, time.strftime('%b_%d_%H:%M:%S', time.localtime())]))
+            model_dir = os.path.join(MODEL_DIR, '_'.join([args.model]))
+            if not os.path.isdir(model_dir):
+                os.mkdir(model_dir)
         elif args.test_model:
             model_dir = os.path.dirname(os.path.abspath(args.test_model))
         metrics_all = one_epoch(model, optimizer, args.Y, epoch, args.n_epochs, args.batch_size, args.data_path,
-                                                  args.version, test_only, dicts, model_dir, 
-                                                  args.samples, args.gpu, args.quiet)
+                                args.version, test_only, dicts, model_dir,
+                                args.samples, args.gpu, args.quiet)
         for name in metrics_all[0].keys():
             metrics_hist[name].append(metrics_all[0][name])
         for name in metrics_all[1].keys():
@@ -84,34 +87,36 @@ def train_epochs(args, model, optimizer, params, dicts):
             metrics_hist_tr[name].append(metrics_all[2][name])
         metrics_hist_all = (metrics_hist, metrics_hist_te, metrics_hist_tr)
 
-        #save metrics, model, params
+        # save metrics, model, params
         persistence.save_everything(args, metrics_hist_all, model, model_dir, params, args.criterion, evaluate)
 
         if test_only:
-            #we're done
+            # we're done
             break
 
         if args.criterion in metrics_hist.keys():
             if early_stop(metrics_hist, args.criterion, args.patience):
-                #stop training, do tests on test and train sets, and then stop the script
+                # stop training, do tests on test and train sets, and then stop the script
                 print("%s hasn't improved in %d epochs, early stopping..." % (args.criterion, args.patience))
                 test_only = True
                 args.test_model = '%s/model_best_%s.pth' % (model_dir, args.criterion)
                 model = tools.pick_model(args, dicts)
-    return epoch+1
+    return epoch + 1
+
 
 def early_stop(metrics_hist, criterion, patience):
     if not np.all(np.isnan(metrics_hist[criterion])):
         if len(metrics_hist[criterion]) >= patience:
-            if criterion == 'loss_dev': 
+            if criterion == 'loss_dev':
                 return np.nanargmin(metrics_hist[criterion]) < len(metrics_hist[criterion]) - patience
             else:
                 return np.nanargmax(metrics_hist[criterion]) < len(metrics_hist[criterion]) - patience
     else:
-        #keep training if criterion results have all been nan so far
+        # keep training if criterion results have all been nan so far
         return False
-        
-def one_epoch(model, optimizer, Y, epoch, n_epochs, batch_size, data_path, version, testing, dicts, model_dir, 
+
+
+def one_epoch(model, optimizer, Y, epoch, n_epochs, batch_size, data_path, version, testing, dicts, model_dir,
               samples, gpu, quiet):
     """
         Wrapper to do a training epoch and test on dev
@@ -123,17 +128,18 @@ def one_epoch(model, optimizer, Y, epoch, n_epochs, batch_size, data_path, versi
     else:
         loss = np.nan
         if model.lmbda > 0:
-            #still need to get unseen code inds
+            # still need to get unseen code inds
             print("getting set of codes not in training set")
             c2ind = dicts['c2ind']
             unseen_code_inds = set(dicts['ind2c'].keys())
             num_labels = len(dicts['ind2c'])
             with open(data_path, 'r') as f:
                 r = csv.reader(f)
-                #header
+                # header
                 next(r)
                 for row in r:
-                    unseen_code_inds = unseen_code_inds.difference(set([c2ind[c] for c in row[3].split(';') if c != '']))
+                    unseen_code_inds = unseen_code_inds.difference(
+                        set([c2ind[c] for c in row[3].split(';') if c != '']))
             print("num codes not in train set: %d" % len(unseen_code_inds))
         else:
             unseen_code_inds = set()
@@ -144,12 +150,12 @@ def one_epoch(model, optimizer, Y, epoch, n_epochs, batch_size, data_path, versi
         testing = True
         quiet = False
 
-    #test on dev
+    # test on dev
     metrics = test(model, Y, epoch, data_path, fold, gpu, version, unseen_code_inds, dicts, samples, model_dir,
                    testing)
     if testing or epoch == n_epochs - 1:
         print("\nevaluating on test")
-        metrics_te = test(model, Y, epoch, data_path, "test", gpu, version, unseen_code_inds, dicts, samples, 
+        metrics_te = test(model, Y, epoch, data_path, "test", gpu, version, unseen_code_inds, dicts, samples,
                           model_dir, True)
     else:
         metrics_te = defaultdict(float)
@@ -169,7 +175,7 @@ def train(model, optimizer, Y, epoch, batch_size, data_path, gpu, version, dicts
     num_labels = len(dicts['ind2c'])
 
     losses = []
-    #how often to print some info to stdout
+    # how often to print some info to stdout
     print_every = 25
 
     ind2w, w2ind, ind2c, c2ind = dicts['ind2w'], dicts['w2ind'], dicts['ind2c'], dicts['c2ind']
@@ -197,13 +203,15 @@ def train(model, optimizer, Y, epoch, batch_size, data_path, gpu, version, dicts
         loss.backward()
         optimizer.step()
 
-        losses.append(loss.data[0])
+        # losses.append(loss.data[0])
+        losses.append(loss.item())
 
         if not quiet and batch_idx % print_every == 0:
-            #print the average loss of the last 10 batches
+            # print the average loss of the last 10 batches
             print("Train epoch: {} [batch #{}, batch_size {}, seq length {}]\tLoss: {:.6f}".format(
                 epoch, batch_idx, data.size()[0], data.size()[1], np.mean(losses[-10:])))
     return losses, unseen_code_inds
+
 
 def unseen_code_vecs(model, code_inds, dicts, gpu):
     """
@@ -211,11 +219,12 @@ def unseen_code_vecs(model, code_inds, dicts, gpu):
     """
     code_vecs = tools.build_code_vecs(code_inds, dicts)
     code_inds, vecs = code_vecs
-    #wrap it in an array so it's 3d
+    # wrap it in an array so it's 3d
     desc_embeddings = model.embed_descriptions([vecs], gpu)[0]
-    #replace relevant final_layer weights with desc embeddings 
+    # replace relevant final_layer weights with desc embeddings
     model.final.weight.data[code_inds, :] = desc_embeddings.data
     model.final.bias.data[code_inds] = 0
+
 
 def test(model, Y, epoch, data_path, fold, gpu, version, code_inds, dicts, samples, model_dir, testing):
     """
@@ -226,7 +235,7 @@ def test(model, Y, epoch, data_path, fold, gpu, version, code_inds, dicts, sampl
     print('file for evaluation: %s' % filename)
     num_labels = len(dicts['ind2c'])
 
-    #initialize stuff for saving attention samples
+    # initialize stuff for saving attention samples
     if samples:
         tp_file = open('%s/tp_%s_examples_%d.txt' % (model_dir, fold, epoch), 'w')
         fp_file = open('%s/fp_%s_examples_%d.txt' % (model_dir, fold, epoch), 'w')
@@ -241,38 +250,41 @@ def test(model, Y, epoch, data_path, fold, gpu, version, code_inds, dicts, sampl
 
     model.eval()
     gen = datasets.data_generator(filename, dicts, 1, num_labels, version=version, desc_embed=desc_embed)
-    for batch_idx, tup in tqdm(enumerate(gen)):
-        data, target, hadm_ids, _, descs = tup
-        data, target = Variable(torch.LongTensor(data), volatile=True), Variable(torch.FloatTensor(target))
-        if gpu:
-            data = data.cuda()
-            target = target.cuda()
-        model.zero_grad()
+    with torch.no_grad():
+        for batch_idx, tup in tqdm(enumerate(gen)):
+            data, target, hadm_ids, _, descs = tup
+            # data, target = Variable(torch.LongTensor(data), volatile=True), Variable(torch.FloatTensor(target))
+            data, target = torch.LongTensor(data), torch.FloatTensor(target)
+            if gpu:
+                data = data.cuda()
+                target = target.cuda()
+            model.zero_grad()
 
-        if desc_embed:
-            desc_data = descs
-        else:
-            desc_data = None
+            if desc_embed:
+                desc_data = descs
+            else:
+                desc_data = None
 
-        #get an attention sample for 2% of batches
-        get_attn = samples and (np.random.rand() < 0.02 or (fold == 'test' and testing))
-        output, loss, alpha = model(data, target, desc_data=desc_data, get_attention=get_attn)
+            # get an attention sample for 2% of batches
+            get_attn = samples and (np.random.rand() < 0.02 or (fold == 'test' and testing))
+            output, loss, alpha = model(data, target, desc_data=desc_data, get_attention=get_attn)
 
-        output = F.sigmoid(output)
-        output = output.data.cpu().numpy()
-        losses.append(loss.data[0])
-        target_data = target.data.cpu().numpy()
-        if get_attn and samples:
-            interpret.save_samples(data, output, target_data, alpha, window_size, epoch, tp_file, fp_file, dicts=dicts)
+            output = F.sigmoid(output)
+            output = output.data.cpu().numpy()
+            # losses.append(loss.data[0])
+            losses.append(loss.item())
+            target_data = target.data.cpu().numpy()
+            if get_attn and samples:
+                interpret.save_samples(data, output, target_data, alpha, window_size, epoch, tp_file, fp_file, dicts=dicts)
 
-        #save predictions, target, hadm ids
-        yhat_raw.append(output)
-        output = np.round(output)
-        y.append(target_data)
-        yhat.append(output)
-        hids.extend(hadm_ids)
+            # save predictions, target, hadm ids
+            yhat_raw.append(output)
+            output = np.round(output)
+            y.append(target_data)
+            yhat.append(output)
+            hids.extend(hadm_ids)
 
-    #close files if needed
+    # close files if needed
     if samples:
         tp_file.close()
         fp_file.close()
@@ -281,14 +293,15 @@ def test(model, Y, epoch, data_path, fold, gpu, version, code_inds, dicts, sampl
     yhat = np.concatenate(yhat, axis=0)
     yhat_raw = np.concatenate(yhat_raw, axis=0)
 
-    #write the predictions
+    # write the predictions
     preds_file = persistence.write_preds(yhat, model_dir, hids, fold, ind2c, yhat_raw)
-    #get metrics
-    k = 5 if num_labels == 50 else [8,15]
+    # get metrics
+    k = 5 if num_labels == 50 else [8, 15]
     metrics = evaluation.all_metrics(yhat, y, k=k, yhat_raw=yhat_raw)
     evaluation.print_metrics(metrics)
     metrics['loss_%s' % fold] = np.mean(losses)
     return metrics
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="train a neural network on some clinical documents")
@@ -296,11 +309,13 @@ if __name__ == "__main__":
                         help="path to a file containing sorted train data. dev/test splits assumed to have same name format with 'train' replaced by 'dev' and 'test'")
     parser.add_argument("vocab", type=str, help="path to a file holding vocab word list for discretizing words")
     parser.add_argument("Y", type=str, help="size of label space")
-    parser.add_argument("model", type=str, choices=["cnn_vanilla", "rnn", "conv_attn", "multi_conv_attn", "logreg", "saved"], help="model")
+    parser.add_argument("model", type=str,
+                        choices=["cnn_vanilla", "rnn", "conv_attn", "multi_conv_attn", "logreg", "saved"], help="model")
     parser.add_argument("n_epochs", type=int, help="number of epochs to train")
     parser.add_argument("--embed-file", type=str, required=False, dest="embed_file",
                         help="path to a file holding pre-trained embeddings")
-    parser.add_argument("--cell-type", type=str, choices=["lstm", "gru"], help="what kind of RNN to use (default: GRU)", dest='cell_type',
+    parser.add_argument("--cell-type", type=str, choices=["lstm", "gru"], help="what kind of RNN to use (default: GRU)",
+                        dest='cell_type',
                         default='gru')
     parser.add_argument("--rnn-dim", type=int, required=False, dest="rnn_dim", default=128,
                         help="size of rnn hidden layer (default: 128)")
@@ -314,8 +329,9 @@ if __name__ == "__main__":
                         help="size of convolution filter to use. (default: 3) For multi_conv_attn, give comma separated integers, e.g. 3,4,5")
     parser.add_argument("--num-filter-maps", type=int, required=False, dest="num_filter_maps", default=50,
                         help="size of conv output (default: 50)")
-    parser.add_argument("--pool", choices=['max', 'avg'], required=False, dest="pool", help="which type of pooling to do (logreg model only)")
-    parser.add_argument("--code-emb", type=str, required=False, dest="code_emb", 
+    parser.add_argument("--pool", choices=['max', 'avg'], required=False, dest="pool",
+                        help="which type of pooling to do (logreg model only)")
+    parser.add_argument("--code-emb", type=str, required=False, dest="code_emb",
                         help="point to code embeddings to use for parameter initialization, if applicable")
     parser.add_argument("--weight-decay", type=float, required=False, dest="weight_decay", default=0,
                         help="coefficient for penalizing l2 norm of model weights (default: 0)")
@@ -327,9 +343,11 @@ if __name__ == "__main__":
                         help="optional specification of dropout (default: 0.5)")
     parser.add_argument("--lmbda", type=float, required=False, dest="lmbda", default=0,
                         help="hyperparameter to tradeoff BCE loss and similarity embedding loss. defaults to 0, which won't create/use the description embedding module at all. ")
-    parser.add_argument("--dataset", type=str, choices=['mimic2', 'mimic3'], dest="version", default='mimic3', required=False,
+    parser.add_argument("--dataset", type=str, choices=['mimic2', 'mimic3'], dest="version", default='mimic3',
+                        required=False,
                         help="version of MIMIC in use (default: mimic3)")
-    parser.add_argument("--test-model", type=str, dest="test_model", required=False, help="path to a saved model to load and evaluate")
+    parser.add_argument("--test-model", type=str, dest="test_model", required=False,
+                        help="path to a saved model to load and evaluate")
     parser.add_argument("--criterion", type=str, default='f1_micro', required=False, dest="criterion",
                         help="which metric to use for early stopping (default: f1_micro)")
     parser.add_argument("--patience", type=int, default=3, required=False,
@@ -348,4 +366,3 @@ if __name__ == "__main__":
     command = ' '.join(['python'] + sys.argv)
     args.command = command
     main(args)
-
